@@ -114,18 +114,23 @@ static cl::opt<int>
              cl::desc("Choose how many time the -bcf pass loop on a function"),
              cl::value_desc("number of times"), cl::init(defaultObfTime),
              cl::Optional);
+
 static cl::opt<int> ConditionExpressionComplexity(
     "bcf_cond_compl",
     cl::desc("The complexity of the expression used to generate branching "
              "condition"),
     cl::value_desc("Complexity"), cl::init(3), cl::Optional);
+
 static Instruction::BinaryOps ops[] = {Instruction::Add, Instruction::Sub,
                                        Instruction::And, Instruction::Or,
                                        Instruction::Xor};
+
 static CmpInst::Predicate preds[] = {CmpInst::ICMP_EQ,  CmpInst::ICMP_NE,
                                      CmpInst::ICMP_UGT, CmpInst::ICMP_UGE,
                                      CmpInst::ICMP_ULT, CmpInst::ICMP_ULE};
+
 namespace {
+
   static bool OnlyUsedBy(Value *V, Value *Usr) {
     for (User *U : V->users())
       if (U != Usr)
@@ -133,6 +138,7 @@ namespace {
 
     return true;
   }
+
   static void RemoveDeadConstant(Constant *C) {
     assert(C->use_empty() && "Constant is not dead!");
     SmallPtrSet<Constant*, 4> Operands;
@@ -144,18 +150,24 @@ namespace {
       GV->eraseFromParent();
     }
     else if (!isa<Function>(C))
+#if LLVM_VERSION_MAJOR >= 12       //not so sure which version
+      if (isa<Type>(C->getType()))      //wangchuanju 2021-11-22
+#else
       if (isa<CompositeType>(C->getType()))
+#endif
         C->destroyConstant();
 
     // If the constant referenced anything, see if we can delete it as well.
     for (Constant *O : Operands)
       RemoveDeadConstant(O);
   }
+
 struct BogusControlFlow : public FunctionPass {
   static char ID; // Pass identification
   bool flag;
   BogusControlFlow() : FunctionPass(ID) { this->flag = true; }
   BogusControlFlow(bool flag) : FunctionPass(ID) { this->flag = flag; }
+
   /* runOnFunction
    *
    * Overwrite FunctionPass method to apply the transformation
@@ -176,9 +188,10 @@ struct BogusControlFlow : public FunctionPass {
     }
     // If fla annotations
     if (toObfuscate(flag, &F, "bcf")) {
-      errs() << "Running BogusControlFlow On " << F.getName() << "\n";
+      errs() << "Running BogusControlFlow On function: " << F.getName() << "\n";
       bogus(F);
       doF(*F.getParent());
+      errs() << "Finished BogusControlFlow On function: " << F.getName() << "\n";
       return true;
     }
 
@@ -266,7 +279,6 @@ struct BogusControlFlow : public FunctionPass {
    * description
    */
   virtual void addBogusFlow(BasicBlock *basicBlock, Function &F) {
-
     // Split the block: first part with only the phi nodes and debug info and
     // terminator
     //                  created by splitBasicBlock. (-> No instruction)
@@ -310,7 +322,7 @@ struct BogusControlFlow : public FunctionPass {
 
     // The always true condition. End of the first block
     ICmpInst *condition =
-        new ICmpInst(*basicBlock, ICmpInst::ICMP_EQ, LHS, RHS,"BCFPlaceHolderPred");
+        new ICmpInst(*basicBlock, ICmpInst::ICMP_EQ, LHS, RHS, "BCFPlaceHolderPred");
     DEBUG_WITH_TYPE("gen", errs() << "bcf: Always true condition created\n");
 
     // Jump to the original basic block if the condition is true or
@@ -346,9 +358,8 @@ struct BogusControlFlow : public FunctionPass {
     // We add at the end a new always true condition
     ICmpInst *condition2 =
         new ICmpInst(*originalBB, CmpInst::ICMP_EQ, LHS, RHS,"BCFPlaceHolderPred");
-    // BranchInst::Create(originalBBpart2, alteredBB, (Value
-    // *)condition2,originalBB);  Do random behavior to avoid pattern
-    // recognition This is achieved by jumping to a random BB
+    // BranchInst::Create(originalBBpart2, alteredBB, (Value *)condition2,originalBB);  
+    // Do random behavior to avoid pattern recognition This is achieved by jumping to a random BB
     switch (llvm::cryptoutils->get_uint16_t() % 2) {
     case 0: {
       BranchInst::Create(originalBBpart2, originalBB, condition2, originalBB);
@@ -383,7 +394,7 @@ struct BogusControlFlow : public FunctionPass {
                                               Function *F = 0) {
     // Useful to remap the informations concerning instructions.
     ValueToValueMapTy VMap;
-    BasicBlock *alteredBB = llvm::CloneBasicBlock(basicBlock, VMap, Name, F);
+    BasicBlock *alteredBB = llvm::CloneBasicBlock(basicBlock, VMap, Name, F);  
     DEBUG_WITH_TYPE("gen", errs() << "bcf: Original basic block cloned\n");
     // Remap operands.
     BasicBlock::iterator ji = basicBlock->begin();
@@ -437,7 +448,11 @@ struct BogusControlFlow : public FunctionPass {
       // randomly insert some instructions
       if (i->isBinaryOp()) { // binary instructions
         unsigned opcode = i->getOpcode();
+#if LLVM_VERSION_MAJOR >= 12      //not so sure which version required
+        Instruction *op, *op1 = NULL;    //wangchuanju 2021-11-23
+#else
         BinaryOperator *op, *op1 = NULL;
+#endif
         Twine *var = new Twine("_");
         // treat differently float or int
         // Binary int
@@ -481,7 +496,12 @@ struct BogusControlFlow : public FunctionPass {
             case 0:                                    // do nothing
               break;
             case 1:
+#if LLVM_VERSION_MAJOR >= 12       //not so sure which version
+              //wangchuanju 2021-11-22
+              op = UnaryOperator::CreateFNeg(i->getOperand(0), *var, &*i);
+#else
               op = BinaryOperator::CreateFNeg(i->getOperand(0), *var, &*i);
+#endif
               op1 = BinaryOperator::Create(Instruction::FAdd, op,
                                            i->getOperand(1), "gen", &*i);
               break;
@@ -649,7 +669,7 @@ struct BogusControlFlow : public FunctionPass {
       for (Function::iterator fi = mi->begin(), fe = mi->end(); fi != fe;
            ++fi) {
         // fi->setName("");
-        Instruction *tbb = fi->getTerminator();
+        Instruction *tbb = fi->getTerminator();       //wangchuanju 2021-11-22  TerminatorInst obsollete in LLVM9 
         if (tbb->getOpcode() == Instruction::Br) {
           BranchInst *br = (BranchInst *)(tbb);
           if (br->isConditional()) {
@@ -772,14 +792,19 @@ struct BogusControlFlow : public FunctionPass {
     return true;
   } // end of doFinalization
 };  // end of struct BogusControlFlow : public FunctionPass
+
 } // namespace
 
+
 char BogusControlFlow::ID = 0;
+
 INITIALIZE_PASS(BogusControlFlow, "bcfobf", "Enable BogusControlFlow.", true,
                 true)
+
 FunctionPass *llvm::createBogusControlFlowPass() {
   return new BogusControlFlow();
 }
+
 FunctionPass *llvm::createBogusControlFlowPass(bool flag) {
   return new BogusControlFlow(flag);
 }

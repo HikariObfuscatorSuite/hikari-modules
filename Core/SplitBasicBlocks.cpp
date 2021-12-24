@@ -22,7 +22,7 @@ struct SplitBasicBlock : public FunctionPass {
   SplitBasicBlock() : FunctionPass(ID) { this->flag = true; }
   SplitBasicBlock(bool flag) : FunctionPass(ID) { this->flag = flag; }
 
-  bool runOnFunction(Function &F);
+  bool runOnFunction(Function &F) override;
   void split(Function *f);
 
   bool containsPHI(BasicBlock *b);
@@ -30,12 +30,16 @@ struct SplitBasicBlock : public FunctionPass {
 };
 } // namespace
 
+
 char SplitBasicBlock::ID = 0;
+
 INITIALIZE_PASS(SplitBasicBlock, "splitobf", "Enable BasicBlockSpliting.", true,
                 true)
+
 FunctionPass *llvm::createSplitBasicBlockPass() {
   return new SplitBasicBlock();
 }
+
 FunctionPass *llvm::createSplitBasicBlockPass(bool flag) {
   return new SplitBasicBlock(flag);
 }

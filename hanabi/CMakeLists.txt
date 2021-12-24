@@ -5,6 +5,7 @@ add_library(LLVMHanabiDeps SHARED #This is for linking a minimum subset of LLVM 
 add_dependencies(LLVMHanabiDeps
   LLVMCore
   LLVMSupport
+  LLVMTransformUtils      # wangchuanju 2021-12-10
 )
 add_library(LLVMHanabi SHARED
   ${CMAKE_CURRENT_LIST_DIR}/Loader.cpp

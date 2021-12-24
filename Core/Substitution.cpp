@@ -18,6 +18,7 @@ static cl::opt<int>
     ObfTimes("sub_loop",
              cl::desc("Choose how many time the -sub pass loops on a function"),
              cl::value_desc("number of times"), cl::init(1), cl::Optional);
+
 static cl::opt<unsigned int>
     ObfProbRate("sub_prob",
                 cl::desc("Choose the probability [%] each basic blocks will be "
@@ -39,13 +40,17 @@ namespace {
 
 struct Substitution : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
+
   void (Substitution::*funcAdd[NUMBER_ADD_SUBST])(BinaryOperator *bo);
   void (Substitution::*funcSub[NUMBER_SUB_SUBST])(BinaryOperator *bo);
   void (Substitution::*funcAnd[NUMBER_AND_SUBST])(BinaryOperator *bo);
   void (Substitution::*funcOr[NUMBER_OR_SUBST])(BinaryOperator *bo);
   void (Substitution::*funcXor[NUMBER_XOR_SUBST])(BinaryOperator *bo);
+
   bool flag;
+
   Substitution(bool flag) : Substitution() { this->flag = flag; }
+
   Substitution() : FunctionPass(ID) {
     this->flag = true;
     funcAdd[0] = &Substitution::addNeg;
@@ -67,7 +72,7 @@ struct Substitution : public FunctionPass {
     funcXor[1] = &Substitution::xorSubstitutionRand;
   }
 
-  bool runOnFunction(Function &F);
+  bool runOnFunction(Function &F) override;
   bool substitute(Function *f);
 
   void addNeg(BinaryOperator *bo);
@@ -88,19 +93,23 @@ struct Substitution : public FunctionPass {
   void xorSubstitution(BinaryOperator *bo);
   void xorSubstitutionRand(BinaryOperator *bo);
 };
+
 } // namespace
+
 
 char Substitution::ID = 0;
 INITIALIZE_PASS(Substitution, "subobf", "Enable Instruction Substitution.",
                 true, true)
+
 FunctionPass *llvm::createSubstitutionPass() { return new Substitution(); }
+
 FunctionPass *llvm::createSubstitutionPass(bool flag) {
   return new Substitution(flag);
 }
+
 bool Substitution::runOnFunction(Function &F) {
   // Check if the percentage is correct
   if (ObfTimes <= 0) {
-    errs() << "Substitution application number -sub_loop=x must be x > 0";
     return false;
   }
   if (ObfProbRate > 100) {
@@ -112,8 +121,9 @@ bool Substitution::runOnFunction(Function &F) {
   Function *tmp = &F;
   // Do we obfuscate
   if (toObfuscate(flag, tmp, "sub")) {
-    errs() << "Running Instruction Substitution On " << F.getName() << "\n";
+    errs() << "Running InstructionSubstitution on function: " << F.getName() << "\n";
     substitute(tmp);
+    errs() << "Finished InstructionSubstitution on function: " << F.getName() << "\n";
     return true;
   }
 
@@ -199,8 +209,7 @@ void Substitution::addNeg(BinaryOperator *bo) {
   // Create sub
   if (bo->getOpcode() == Instruction::Add) {
     op = BinaryOperator::CreateNeg(bo->getOperand(1), "", bo);
-    op =
-        BinaryOperator::Create(Instruction::Sub, bo->getOperand(0), op, "", bo);
+    op = BinaryOperator::Create(Instruction::Sub, bo->getOperand(0), op, "", bo);
 
     // Check signed wrap
     // op->setHasNoSignedWrap(bo->hasNoSignedWrap());
@@ -212,7 +221,11 @@ void Substitution::addNeg(BinaryOperator *bo) {
 
 // Implementation of a = -(-b + (-c))
 void Substitution::addDoubleNeg(BinaryOperator *bo) {
+#if LLVM_VERSION_MAJOR >= 10    //not so sure which version
+  Instruction *op, *op2 = NULL;       //wangchuanju 2021-11-23
+#else
   BinaryOperator *op, *op2 = NULL;
+#endif
 
   if (bo->getOpcode() == Instruction::Add) {
     op = BinaryOperator::CreateNeg(bo->getOperand(0), "", bo);
@@ -225,10 +238,21 @@ void Substitution::addDoubleNeg(BinaryOperator *bo) {
     // op->setHasNoUnsignedWrap(bo->hasNoUnsignedWrap());
   }
   else {
+#if LLVM_VERSION_MAJOR >= 11    //not so sure which version
+    op = UnaryOperator::CreateFNeg(bo->getOperand(0), "", bo);             //wangchuanju 2021-11-23
+    op2 = UnaryOperator::CreateFNeg(bo->getOperand(1), "", bo);            //wangchuanju 2021-11-23
+#else
     op = BinaryOperator::CreateFNeg(bo->getOperand(0), "", bo);
     op2 = BinaryOperator::CreateFNeg(bo->getOperand(1), "", bo);
+#endif
+
     op = BinaryOperator::Create(Instruction::FAdd, op, op2, "", bo);
+
+#if LLVM_VERSION_MAJOR >= 11    //not so sure which version
+    op = UnaryOperator::CreateFNeg(op, "", bo);                            //wangchuanju 2021-11-23
+#else
     op = BinaryOperator::CreateFNeg(op, "", bo);
+#endif
   }
     bo->replaceAllUsesWith(op);
 
@@ -240,12 +264,9 @@ void Substitution::addRand(BinaryOperator *bo) {
 
   if (bo->getOpcode() == Instruction::Add) {
     Type *ty = bo->getType();
-    ConstantInt *co =
-        (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
-    op =
-        BinaryOperator::Create(Instruction::Add, bo->getOperand(0), co, "", bo);
-    op =
-        BinaryOperator::Create(Instruction::Add, op, bo->getOperand(1), "", bo);
+    ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+    op = BinaryOperator::Create(Instruction::Add, bo->getOperand(0), co, "", bo);
+    op = BinaryOperator::Create(Instruction::Add, op, bo->getOperand(1), "", bo);
     op = BinaryOperator::Create(Instruction::Sub, op, co, "", bo);
 
     // Check signed wrap
@@ -270,12 +291,9 @@ void Substitution::addRand2(BinaryOperator *bo) {
 
   if (bo->getOpcode() == Instruction::Add) {
     Type *ty = bo->getType();
-    ConstantInt *co =
-        (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
-    op =
-        BinaryOperator::Create(Instruction::Sub, bo->getOperand(0), co, "", bo);
-    op =
-        BinaryOperator::Create(Instruction::Add, op, bo->getOperand(1), "", bo);
+    ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+    op = BinaryOperator::Create(Instruction::Sub, bo->getOperand(0), co, "", bo);
+    op = BinaryOperator::Create(Instruction::Add, op, bo->getOperand(1), "", bo);
     op = BinaryOperator::Create(Instruction::Add, op, co, "", bo);
 
     // Check signed wrap
@@ -296,19 +314,27 @@ void Substitution::addRand2(BinaryOperator *bo) {
 
 // Implementation of a = b + (-c)
 void Substitution::subNeg(BinaryOperator *bo) {
+#if LLVM_VERSION_MAJOR >= 10    //not so sure which version
+  Instruction *op = NULL;       //wangchuanju 2021-11-23
+#else
   BinaryOperator *op = NULL;
+#endif
 
   if (bo->getOpcode() == Instruction::Sub) {
     op = BinaryOperator::CreateNeg(bo->getOperand(1), "", bo);
-    op =
-        BinaryOperator::Create(Instruction::Add, bo->getOperand(0), op, "", bo);
+    op = BinaryOperator::Create(Instruction::Add, bo->getOperand(0), op, "", bo);
 
     // Check signed wrap
     // op->setHasNoSignedWrap(bo->hasNoSignedWrap());
     // op->setHasNoUnsignedWrap(bo->hasNoUnsignedWrap());
   }
   else {
+#if LLVM_VERSION_MAJOR >= 10    //not so sure which version
+    op = UnaryOperator::CreateFNeg(bo->getOperand(1), "", bo);            //wangchuanju 2021-11-23
+#else
     op = BinaryOperator::CreateFNeg(bo->getOperand(1), "", bo);
+#endif
+
     op = BinaryOperator::Create(Instruction::FAdd, bo->getOperand(0), op, "",
                                 bo);
   }
@@ -321,12 +347,9 @@ void Substitution::subRand(BinaryOperator *bo) {
 
   if (bo->getOpcode() == Instruction::Sub) {
     Type *ty = bo->getType();
-    ConstantInt *co =
-        (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
-    op =
-        BinaryOperator::Create(Instruction::Add, bo->getOperand(0), co, "", bo);
-    op =
-        BinaryOperator::Create(Instruction::Sub, op, bo->getOperand(1), "", bo);
+    ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+    op = BinaryOperator::Create(Instruction::Add, bo->getOperand(0), co, "", bo);
+    op = BinaryOperator::Create(Instruction::Sub, op, bo->getOperand(1), "", bo);
     op = BinaryOperator::Create(Instruction::Sub, op, co, "", bo);
 
     // Check signed wrap
@@ -351,12 +374,9 @@ void Substitution::subRand2(BinaryOperator *bo) {
 
   if (bo->getOpcode() == Instruction::Sub) {
     Type *ty = bo->getType();
-    ConstantInt *co =
-        (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
-    op =
-        BinaryOperator::Create(Instruction::Sub, bo->getOperand(0), co, "", bo);
-    op =
-        BinaryOperator::Create(Instruction::Sub, op, bo->getOperand(1), "", bo);
+    ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+    op = BinaryOperator::Create(Instruction::Sub, bo->getOperand(0), co, "", bo);
+    op = BinaryOperator::Create(Instruction::Sub, op, bo->getOperand(1), "", bo);
     op = BinaryOperator::Create(Instruction::Add, op, co, "", bo);
 
     // Check signed wrap
@@ -383,8 +403,7 @@ void Substitution::andSubstitution(BinaryOperator *bo) {
   op = BinaryOperator::CreateNot(bo->getOperand(1), "", bo);
 
   // Create XOR => (b^~c)
-  BinaryOperator *op1 =
-      BinaryOperator::Create(Instruction::Xor, bo->getOperand(0), op, "", bo);
+  BinaryOperator *op1 = BinaryOperator::Create(Instruction::Xor, bo->getOperand(0), op, "", bo);
 
   // Create AND => (b^~c) & b
   op = BinaryOperator::Create(Instruction::And, op1, bo->getOperand(0), "", bo);
@@ -398,8 +417,7 @@ void Substitution::andSubstitutionRand(BinaryOperator *bo) {
   Type *ty = bo->getType();
 
   // r (Random number)
-  ConstantInt *co =
-      (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+  ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
 
   // !a
   BinaryOperator *op = BinaryOperator::CreateNot(bo->getOperand(0), "", bo);
@@ -411,8 +429,7 @@ void Substitution::andSubstitutionRand(BinaryOperator *bo) {
   BinaryOperator *opr = BinaryOperator::CreateNot(co, "", bo);
 
   // (!a | !b)
-  BinaryOperator *opa =
-      BinaryOperator::Create(Instruction::Or, op, op1, "", bo);
+  BinaryOperator *opa = BinaryOperator::Create(Instruction::Or, op, op1, "", bo);
 
   // (r | !r)
   opr = BinaryOperator::Create(Instruction::Or, co, opr, "", bo);
@@ -429,10 +446,8 @@ void Substitution::andSubstitutionRand(BinaryOperator *bo) {
 
 // Implementation of a = b | c => a = (b & c) | (b ^ c)
 void Substitution::orSubstitutionRand(BinaryOperator *bo) {
-
   Type *ty = bo->getType();
-  ConstantInt *co =
-      (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+  ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
 
   // !a
   BinaryOperator *op = BinaryOperator::CreateNot(bo->getOperand(0), "", bo);
@@ -444,20 +459,16 @@ void Substitution::orSubstitutionRand(BinaryOperator *bo) {
   BinaryOperator *op2 = BinaryOperator::CreateNot(co, "", bo);
 
   // !a && r
-  BinaryOperator *op3 =
-      BinaryOperator::Create(Instruction::And, op, co, "", bo);
+  BinaryOperator *op3 = BinaryOperator::Create(Instruction::And, op, co, "", bo);
 
   // a && !r
-  BinaryOperator *op4 =
-      BinaryOperator::Create(Instruction::And, bo->getOperand(0), op2, "", bo);
+  BinaryOperator *op4 = BinaryOperator::Create(Instruction::And, bo->getOperand(0), op2, "", bo);
 
   // !b && r
-  BinaryOperator *op5 =
-      BinaryOperator::Create(Instruction::And, op1, co, "", bo);
+  BinaryOperator *op5 = BinaryOperator::Create(Instruction::And, op1, co, "", bo);
 
   // b && !r
-  BinaryOperator *op6 =
-      BinaryOperator::Create(Instruction::And, bo->getOperand(1), op2, "", bo);
+  BinaryOperator *op6 = BinaryOperator::Create(Instruction::And, bo->getOperand(1), op2, "", bo);
 
   // (!a && r) || (a && !r)
   op3 = BinaryOperator::Create(Instruction::Or, op3, op4, "", bo);
@@ -514,8 +525,7 @@ void Substitution::xorSubstitution(BinaryOperator *bo) {
                               bo); // !a && b
 
   // Create NOT on second operand
-  BinaryOperator *op1 =
-      BinaryOperator::CreateNot(bo->getOperand(1), "", bo); // !b
+  BinaryOperator *op1 = BinaryOperator::CreateNot(bo->getOperand(1), "", bo); // !b
 
   // Create AND
   op1 = BinaryOperator::Create(Instruction::And, bo->getOperand(0), op1, "",
@@ -534,8 +544,7 @@ void Substitution::xorSubstitutionRand(BinaryOperator *bo) {
   BinaryOperator *op = NULL;
 
   Type *ty = bo->getType();
-  ConstantInt *co =
-      (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
+  ConstantInt *co = (ConstantInt *)ConstantInt::get(ty, llvm::cryptoutils->get_uint64_t());
 
   // !a
   op = BinaryOperator::CreateNot(bo->getOperand(0), "", bo);
@@ -547,8 +556,7 @@ void Substitution::xorSubstitutionRand(BinaryOperator *bo) {
   BinaryOperator *opr = BinaryOperator::CreateNot(co, "", bo);
 
   // a && !r
-  BinaryOperator *op1 =
-      BinaryOperator::Create(Instruction::And, bo->getOperand(0), opr, "", bo);
+  BinaryOperator *op1 = BinaryOperator::Create(Instruction::And, bo->getOperand(0), opr, "", bo);
 
   // !b
   BinaryOperator *op2 = BinaryOperator::CreateNot(bo->getOperand(1), "", bo);
@@ -557,8 +565,7 @@ void Substitution::xorSubstitutionRand(BinaryOperator *bo) {
   op2 = BinaryOperator::Create(Instruction::And, op2, co, "", bo);
 
   // b && !r
-  BinaryOperator *op3 =
-      BinaryOperator::Create(Instruction::And, bo->getOperand(1), opr, "", bo);
+  BinaryOperator *op3 = BinaryOperator::Create(Instruction::And, bo->getOperand(1), opr, "", bo);
 
   // (!a && r) || (a && !r)
   op = BinaryOperator::Create(Instruction::Or, op, op1, "", bo);

@@ -7,8 +7,10 @@
 */
 #include "llvm/Transforms/Obfuscation/Obfuscation.h"
 #include <iostream>
+
 using namespace llvm;
 using namespace std;
+
 // Begin Obfuscator Options
 static cl::opt<uint64_t> AesSeed("aesSeed", cl::init(0x1337),
                                     cl::desc("seed for the PRNG"));
@@ -76,13 +78,19 @@ static void LoadEnv() {
    EnableFlattening = true;
  }
 }
+
+
 namespace llvm {
+
 struct Obfuscation : public ModulePass {
   static char ID;
+
   Obfuscation() : ModulePass(ID) {}
+
   StringRef getPassName() const override {
     return StringRef("HikariObfuscationScheduler");
   }
+
   bool runOnModule(Module &M) override {
     // Initial ACD Pass
     if (EnableAllObfuscation || EnableAntiClassDump) {
@@ -91,9 +99,9 @@ struct Obfuscation : public ModulePass {
       P->runOnModule(M);
       delete P;
     }
+    
     // Now do FCO
-    FunctionPass *FP = createFunctionCallObfuscatePass(
-        EnableAllObfuscation || EnableFunctionCallObfuscate);
+    FunctionPass *FP = createFunctionCallObfuscatePass(EnableAllObfuscation || EnableFunctionCallObfuscate);
     FP->doInitialization(M);
     for (Module::iterator iter = M.begin(); iter != M.end(); iter++) {
       Function &F = *iter;
@@ -102,11 +110,13 @@ struct Obfuscation : public ModulePass {
       }
     }
     delete FP;
+
     // Now Encrypt Strings
     ModulePass *MP = createStringEncryptionPass(EnableAllObfuscation ||
                                     EnableStringEncryption);
     MP->runOnModule(M);
     delete MP;
+
     /*
     // Placing FW here does provide the most obfuscation however the compile
     time
@@ -117,6 +127,7 @@ struct Obfuscation : public ModulePass {
       P->runOnModule(M);
       delete P;
     }*/
+
     // Now perform Function-Level Obfuscation
     for (Module::iterator iter = M.begin(); iter != M.end(); iter++) {
       Function &F = *iter;
@@ -138,6 +149,7 @@ struct Obfuscation : public ModulePass {
         delete P;
       }
     }
+
     errs() << "Doing Post-Run Cleanup\n";
     FunctionPass *P = createIndirectBranchPass(EnableAllObfuscation ||
                                                EnableIndirectBranching);
@@ -149,10 +161,12 @@ struct Obfuscation : public ModulePass {
       P->runOnFunction(*F);
     }
     delete P;
+
     MP = createFunctionWrapperPass(EnableAllObfuscation ||
                                    EnableFunctionWrapper);
     MP->runOnModule(M);
     delete MP;
+
     // Cleanup Flags
     vector<Function *> toDelete;
     for (Module::iterator iter = M.begin(); iter != M.end(); iter++) {
@@ -173,7 +187,9 @@ struct Obfuscation : public ModulePass {
     errs() << "Hikari Out\n";
     return true;
   } // End runOnModule
+
 };
+
 ModulePass *createObfuscationPass() {
   LoadEnv();
   if (AesSeed!=0x1337) {
@@ -185,8 +201,12 @@ ModulePass *createObfuscationPass() {
   cout<<"Initializing Hikari Core with Revision ID:"<<GIT_COMMIT_HASH<<endl;
   return new Obfuscation();
 }
+
 } // namespace llvm
+
+
 char Obfuscation::ID = 0;
+
 INITIALIZE_PASS_BEGIN(Obfuscation, "obfus", "Enable Obfuscation", true, true)
 INITIALIZE_PASS_DEPENDENCY(AntiClassDump);
 INITIALIZE_PASS_DEPENDENCY(BogusControlFlow);

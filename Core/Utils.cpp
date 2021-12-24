@@ -7,8 +7,15 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/NoFolder.h"
+#include "llvm/Analysis/CFG.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+
+#include <iostream>
+#include <string>
+
 using namespace llvm;
 using namespace std;
+
 // Shamefully borrowed from ../Scalar/RegToMem.cpp :(
 bool valueEscapes(Instruction *Inst) {
   BasicBlock *BB = Inst->getParent();
@@ -21,6 +28,7 @@ bool valueEscapes(Instruction *Inst) {
   }
   return false;
 }
+
 void appendToAnnotations(Module &M, ConstantStruct *Data) {
   // Type for the annotation array
   // { i8*, i8*, i8*, i32 }
@@ -56,6 +64,7 @@ void appendToAnnotations(Module &M, ConstantStruct *Data) {
     return;
   }
 }
+
 void FixFunctionConstantExpr(Function *Func) {
   // Replace ConstantExpr with equal instructions
   // Otherwise replacing on Constant will crash the compiler
@@ -63,6 +72,7 @@ void FixFunctionConstantExpr(Function *Func) {
     FixBasicBlockConstantExpr(&BB);
   }
 }
+
 void FixBasicBlockConstantExpr(BasicBlock *BB) {
   // Replace ConstantExpr with equal instructions
   // Otherwise replacing on Constant will crash the compiler
@@ -118,6 +128,102 @@ map<GlobalValue *, StringRef> BuildAnnotateMap(Module &M) {
   return VAMap;
 }
 
+
+AllocaInst *DemoteRegToStack_fix(Instruction &I, bool VolatileLoads=false, Instruction *AllocaPoint=nullptr) {
+  // errs() << "-- Utils.cpp : DemoteRegToStack_fix() -- 0000 -- I: " << &I << "\n";
+  // BasicBlock *bb = I.getParent();
+  // Function *ff = bb->getParent();
+  // Module *mm = ff->getParent();
+  
+  if (I.use_empty()) {
+    I.eraseFromParent();
+    return nullptr;
+  }
+
+  Function *F = I.getParent()->getParent();
+  const DataLayout &DL = F->getParent()->getDataLayout();
+
+  // Create a stack slot to hold the value.
+  AllocaInst *Slot;
+  if (AllocaPoint) {
+    Slot = new AllocaInst(I.getType(), DL.getAllocaAddrSpace(), nullptr,
+                          I.getName()+".reg2mem", AllocaPoint);
+  } else {
+    Slot = new AllocaInst(I.getType(), DL.getAllocaAddrSpace(), nullptr,
+                          I.getName() + ".reg2mem", &F->getEntryBlock().front());
+  }
+
+  // We cannot demote invoke instructions to the stack if their normal edge
+  // is critical. Therefore, split the critical edge and create a basic block
+  // into which the store can be inserted.
+  if (InvokeInst *II = dyn_cast<InvokeInst>(&I)) {
+    if (!II->getNormalDest()->getSinglePredecessor()) {
+      unsigned SuccNum = GetSuccessorNumber(II->getParent(), II->getNormalDest());
+      assert(isCriticalEdge(II, SuccNum) && "Expected a critical edge!");
+      BasicBlock *BB = SplitCriticalEdge(II, SuccNum);
+      assert(BB && "Unable to split critical edge.");
+      (void)BB;
+    }
+  }
+
+  // Change all of the users of the instruction to read from the stack slot.
+  while (!I.use_empty()) {     
+    Instruction *U = cast<Instruction>(I.user_back());
+    if (PHINode *PN = dyn_cast<PHINode>(U)) {
+      // If this is a PHI node, we can't insert a load of the value before the
+      // use.  Instead insert the load in the predecessor block corresponding
+      // to the incoming value.
+      //
+      // Note that if there are multiple edges from a basic block to this PHI
+      // node that we cannot have multiple loads. The problem is that the
+      // resulting PHI node will have multiple values (from each load) coming in
+      // from the same block, which is illegal SSA form. For this reason, we
+      // keep track of and reuse loads we insert.
+      DenseMap<BasicBlock*, Value*> Loads;
+      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+        if (PN->getIncomingValue(i) == &I) {
+          Value *&V = Loads[PN->getIncomingBlock(i)];
+          if (!V) {
+            // Insert the load into the predecessor block
+            V = new LoadInst(I.getType(), Slot, I.getName() + ".reload",     //TODO:!!! 8.x has no I.getType() arguemnt
+                             VolatileLoads,
+                             PN->getIncomingBlock(i)->getTerminator());
+          }
+          PN->setIncomingValue(i, V);
+        }
+
+    } else {
+      if (U->getParent() == nullptr) {
+        //if the user instruction is not in a BasicBlock, the following code will crash.  wangchuanju 2021-12-22
+        errs() << "-- Utils.cpp : DemoteRegToStack_fix() - U not belongs a BasicBlock, break the replaceUsesOfWith(). I: " << &I << " , U: " << U << "\n";
+        if (I.isTerminator()) {
+          errs() << "    !! --  I is a terminator. \n";
+        }
+        break;
+      } 
+      // If this is a normal instruction, just insert a load.
+      Value *V = new LoadInst(I.getType(), Slot, I.getName() + ".reload", VolatileLoads, U);
+      U->replaceUsesOfWith(&I, V);
+    }
+  }
+
+  // Insert stores of the computed value into the stack slot. We have to be
+  // careful if I is an invoke instruction, because we can't insert the store
+  // AFTER the terminator instruction.
+  BasicBlock::iterator InsertPt;
+  if (!I.isTerminator()) {
+    InsertPt = ++I.getIterator();
+    for (; isa<PHINode>(InsertPt) || InsertPt->isEHPad(); ++InsertPt)
+      /* empty */;   // Don't insert before PHI nodes or landingpad instrs.
+  } else {
+    InvokeInst &II = cast<InvokeInst>(I);
+    InsertPt = II.getNormalDest()->getFirstInsertionPt();
+  }
+
+  new StoreInst(&I, Slot, &*InsertPt);
+  return Slot;
+}
+
 void fixStack(Function *f) {
   // Try to remove phi node and demote reg to stack
   std::vector<PHINode *> tmpPhi;
@@ -129,14 +235,13 @@ void fixStack(Function *f) {
     tmpReg.clear();
 
     for (Function::iterator i = f->begin(); i != f->end(); ++i) {
-
       for (BasicBlock::iterator j = i->begin(); j != i->end(); ++j) {
-
         if (isa<PHINode>(j)) {
           PHINode *phi = cast<PHINode>(j);
           tmpPhi.push_back(phi);
           continue;
         }
+
         if (!(isa<AllocaInst>(j) && j->getParent() == bbEntry) &&
             (valueEscapes(&*j) || j->isUsedOutsideOfBlock(&*i))) {
           tmpReg.push_back(&*j);
@@ -144,8 +249,11 @@ void fixStack(Function *f) {
         }
       }
     }
+
     for (unsigned int i = 0; i != tmpReg.size(); ++i) {
-      DemoteRegToStack(*tmpReg.at(i), f->begin()->getTerminator());
+      DemoteRegToStack(*tmpReg.at(i), f->begin()->getTerminator());    
+      // DemoteRegToStack_fix(*tmpReg.at(i), true);    //wangchuanju 2021-12-10
+      // ?? Looked into the definition, the above calling maybe should be: DemoteRegToStack(*tmpReg.at(i), true)  
     }
 
     for (unsigned int i = 0; i != tmpPhi.size(); ++i) {
@@ -153,6 +261,7 @@ void fixStack(Function *f) {
     }
 
   } while (tmpReg.size() != 0 || tmpPhi.size() != 0);
+
 }
 
 std::string readAnnotate(Function *f) {
@@ -216,6 +325,7 @@ bool readFlag(Function *f, std::string attribute) {
   }
   return false;
 }
+
 bool toObfuscate(bool flag, Function *f, std::string attribute) {
 
   // Check if declaration

@@ -29,16 +29,23 @@
 #include <deque>
 #include <iostream>
 #include <string>
+
 using namespace llvm;
 using namespace std;
+
 static cl::opt<bool>
     UseInitialize("acd-use-initialize", cl::init(true), cl::NotHidden,
                   cl::desc("[AntiClassDump]Inject codes to +initialize"));
+
 namespace llvm {
+
 struct AntiClassDump : public ModulePass {
   static char ID;
+
   AntiClassDump() : ModulePass(ID) {}
+
   StringRef getPassName() const override { return StringRef("AntiClassDump"); }
+
   virtual bool doInitialization(Module &M) override {
     // Basic Defs
     Triple tri(M.getTargetTriple());
@@ -49,6 +56,7 @@ struct AntiClassDump : public ModulePass {
           << " is Not Supported For LLVM AntiClassDump\nProbably GNU Step?\n";
       return false;
     }
+
     Type *Int64Ty = Type::getInt64Ty(M.getContext());
     Type *Int32Ty = Type::getInt32Ty(M.getContext());
     Type *Int8PtrTy = Type::getInt8PtrTy(M.getContext());
@@ -72,8 +80,13 @@ struct AntiClassDump : public ModulePass {
         FunctionType::get(Int8PtrTy, {Int8PtrTy}, false);
     M.getOrInsertFunction("objc_getClass", objc_getClass_type);
     M.getOrInsertFunction("objc_getMetaClass", objc_getClass_type);
+
     StructType *objc_property_attribute_t_type = reinterpret_cast<StructType *>(
+#if LLVM_VERSION_MAJOR >= 12      
+        StructType::getTypeByName(M.getContext(), "struct.objc_property_attribute_t"));   //wangchuanju 2021-11-24
+#else    
         M.getTypeByName("struct.objc_property_attribute_t"));
+#endif    
     if (objc_property_attribute_t_type == NULL) {
       vector<Type *> types;
       types.push_back(Int8PtrTy);
@@ -123,14 +136,17 @@ struct AntiClassDump : public ModulePass {
     M.getOrInsertFunction("objc_getMetaClass", objc_getMetaClass_Type);
     return true;
   }
+
   bool runOnModule(Module &M) override {
-    errs() << "Running AntiClassDump On " << M.getSourceFileName() << "\n";
+    errs() << "Running AntiClassDump.runOnModule() on module " << M.getSourceFileName() << "\n";
+
     GlobalVariable *OLCGV = M.getGlobalVariable("OBJC_LABEL_CLASS_$", true);
     if (OLCGV == NULL) {
       errs() << "No ObjC Class Found in :" << M.getSourceFileName() << "\n";
       // No ObjC class found.
       return false;
     }
+
     /*// Create our own Initializer
     FunctionType *InitializerType = FunctionType::get(
         Type::getVoidTy(M.getContext()), ArrayRef<Type *>(), false);
@@ -148,12 +164,14 @@ struct AntiClassDump : public ModulePass {
     assert(OBJC_LABEL_CLASS_CDS &&
            "OBJC_LABEL_CLASS_$ Not ConstantArray.Is the target using "
            "unsupported legacy runtime?");
+
     vector<string> readyclses; // This is for storing classes that can be used
                                // in handleClass()
     deque<string> tmpclses;    // This is temporary storage for classes
     map<string /*class*/, string /*super class*/> dependency;
     map<string /*Class*/, GlobalVariable *>
         GVMapping; // Map ClassName to corresponding GV
+
     for (unsigned i = 0; i < OBJC_LABEL_CLASS_CDS->getNumOperands(); i++) {
       ConstantExpr *clsEXPR =
           dyn_cast<ConstantExpr>(OBJC_LABEL_CLASS_CDS->getOperand(i));
@@ -189,6 +207,7 @@ struct AntiClassDump : public ModulePass {
         tmpclses.push_back(clsName);
       }
     }
+
     // Sort Initialize Sequence Based On Dependency
     while (tmpclses.size() > 0) {
       string clstmp = tmpclses.front();
@@ -210,16 +229,26 @@ struct AntiClassDump : public ModulePass {
     for (string className : readyclses) {
       handleClass(GVMapping[className], &M);
     }
+
+    errs() << "Finished AntiClassDump.runOnModule() on module " << M.getSourceFileName() << "\n";
     return true;
   } // runOnModule
+
   map<string, Value *>
   splitclass_ro_t(ConstantStruct *class_ro,
                   Module *M) { // Split a class_ro_t structure
     map<string, Value *> info;
-    StructType *objc_method_list_t_type =
-        M->getTypeByName("struct.__method_list_t");
+
+#if LLVM_VERSION_MAJOR >= 12      
+    StructType *objc_method_list_t_type = StructType::getTypeByName(M->getContext(), "struct.__method_list_t");   //wangchuanju 2021-11-24
+    StructType *ivar_list_t_type = StructType::getTypeByName(M->getContext(), "struct._ivar_list_t");   //wangchuanju 2021-11-24
+    StructType *property_list_t_type = StructType::getTypeByName(M->getContext(), "struct._prop_list_t");   //wangchuanju 2021-11-24
+#else
+    StructType *objc_method_list_t_type = M->getTypeByName("struct.__method_list_t");
     StructType *ivar_list_t_type = M->getTypeByName("struct._ivar_list_t");
     StructType *property_list_t_type = M->getTypeByName("struct._prop_list_t");
+#endif        
+
     for (unsigned i = 0; i < class_ro->getType()->getNumElements(); i++) {
       Constant *tmp = dyn_cast<Constant>(class_ro->getAggregateElement(i));
       if (tmp->isNullValue()) {
@@ -249,6 +278,7 @@ struct AntiClassDump : public ModulePass {
     }
     return info;
   } // splitclass_ro_t
+
   void handleClass(GlobalVariable *GV, Module *M) {
     assert(GV->hasInitializer() &&
            "ObjC Class Structure's Initializer Missing");
@@ -340,7 +370,13 @@ struct AntiClassDump : public ModulePass {
       HandleMethods(metaclassCS, IRB, M, Class, false);
 
       errs() << "Updating Class Method Map For Class:" << ClassName << "\n";
+
+#if LLVM_VERSION_MAJOR >= 12      
+      Type *objc_method_type = StructType::getTypeByName(M->getContext(), "struct._objc_method");   //wangchuanju 2021-11-24
+#else      
       Type *objc_method_type = M->getTypeByName("struct._objc_method");
+#endif      
+
       ArrayType *AT = ArrayType::get(objc_method_type, 0);
       Constant *newMethodList = ConstantArray::get(AT, ArrayRef<Constant *>());
       GlobalVariable *methodListGV =
@@ -372,7 +408,11 @@ struct AntiClassDump : public ModulePass {
       newMethodStructGV->copyAttributesFrom(methodListGV);
       Constant *bitcastExpr = ConstantExpr::getBitCast(
           newMethodStructGV,
+#if LLVM_VERSION_MAJOR >= 12
+          StructType::getTypeByName(M->getContext(), "struct.__method_list_t")->getPointerTo());   //wangchuanju 2021-11-24
+#else      
           M->getTypeByName("struct.__method_list_t")->getPointerTo());
+#endif
       metaclassCS->handleOperandChange(metaclassCS->getAggregateElement(5),
                                        bitcastExpr);
       methodListGV->replaceAllUsesWith(ConstantExpr::getBitCast(
@@ -395,7 +435,13 @@ struct AntiClassDump : public ModulePass {
           cast<GlobalVariable>(classCS->getAggregateElement(5)->getOperand(0));
     }
     errs() << "Updating Class Method Map For Class:" << ClassName << "\n";
+
+#if LLVM_VERSION_MAJOR >= 12
+    Type *objc_method_type = StructType::getTypeByName(M->getContext(), "struct._objc_method");   //wangchuanju 2021-11-24
+#else
     Type *objc_method_type = M->getTypeByName("struct._objc_method");
+#endif
+
     ArrayType *AT = ArrayType::get(objc_method_type, 1);
     Constant *MethName = NULL;
     if (UseInitialize) {
@@ -459,7 +505,11 @@ struct AntiClassDump : public ModulePass {
     }
     Constant *bitcastExpr = ConstantExpr::getBitCast(
         newMethodStructGV,
+#if LLVM_VERSION_MAJOR >= 12
+        StructType::getTypeByName(M->getContext(), "struct.__method_list_t")->getPointerTo());   //wangchuanju 2021-11-24
+#else
         M->getTypeByName("struct.__method_list_t")->getPointerTo());
+#endif
     classCS->handleOperandChange(classCS->getAggregateElement(5), bitcastExpr);
     if (methodListGV) {
       methodListGV->replaceAllUsesWith(ConstantExpr::getBitCast(
@@ -472,6 +522,7 @@ struct AntiClassDump : public ModulePass {
     errs() << "Updated Class Method Map of:" << class_ro->getName() << "\n";
     // End ClassCS Handling
   } // handleClass
+
   void HandleMethods(ConstantStruct *class_ro, IRBuilder<> *IRB, Module *M,
                      Value *Class, bool isMetaClass) {
     Function *sel_registerName = M->getFunction("sel_registerName");
@@ -479,7 +530,11 @@ struct AntiClassDump : public ModulePass {
     Function *class_getName = M->getFunction("class_getName");
     Function *objc_getMetaClass = M->getFunction("objc_getMetaClass");
     StructType *objc_method_list_t_type =
+#if LLVM_VERSION_MAJOR >= 12
+        StructType::getTypeByName(M->getContext(), "struct.__method_list_t");   //wangchuanju 2021-11-24
+#else
         M->getTypeByName("struct.__method_list_t");
+#endif
     for (unsigned i = 0; i < class_ro->getType()->getNumElements(); i++) {
       Constant *tmp = dyn_cast<Constant>(class_ro->getAggregateElement(i));
       if (tmp->isNullValue()) {
@@ -535,15 +590,28 @@ struct AntiClassDump : public ModulePass {
       }
     }
   }
+
   void HandlePropertyIvar(ConstantStruct *class_ro, IRBuilder<> *IRB, Module *M,
                           Value *Class) {
     StructType *objc_property_attribute_t_type = reinterpret_cast<StructType *>(
+#if LLVM_VERSION_MAJOR >= 12
+        StructType::getTypeByName(M->getContext(), "struct.objc_property_attribute_t"));   //wangchuanju 2021-11-24
+#else
         M->getTypeByName("struct.objc_property_attribute_t"));
+#endif
     Function *class_addProperty = M->getFunction("class_addProperty");
     Function *class_addIvar = M->getFunction("class_addIvar");
+
+#if LLVM_VERSION_MAJOR >= 12
+    StructType *ivar_list_t_type = StructType::getTypeByName(M->getContext(), "struct._ivar_list_t");       //wangchuanju 2021-11-24
+    StructType *property_list_t_type = StructType::getTypeByName(M->getContext(), "struct._prop_list_t");   //wangchuanju 2021-11-24
+    StructType *property_t_type = StructType::getTypeByName(M->getContext(), "struct._prop_t");             //wangchuanju 2021-11-24
+#else
     StructType *ivar_list_t_type = M->getTypeByName("struct._ivar_list_t");
     StructType *property_list_t_type = M->getTypeByName("struct._prop_list_t");
     StructType *property_t_type = M->getTypeByName("struct._prop_t");
+#endif
+
     ConstantExpr *ivar_list = NULL;
     ConstantExpr *property_list = NULL;
     /*
@@ -654,7 +722,11 @@ struct AntiClassDump : public ModulePass {
         for (StringRef s : attrComponents) {
           StringRef key = s.substr(0, 1);
           StringRef value = s.substr(1);
+#if LLVM_VERSION_MAJOR >= 12      //not so sure which version required
+          propMap[key.str()] = value.str();     //wangchuanju 2021-11-24
+#else
           propMap[key] = value;
+#endif
           vector<Constant *> tmp;
           Constant *KeyConst =
               dyn_cast<Constant>(IRB->CreateGlobalStringPtr(key));
@@ -692,7 +764,10 @@ struct AntiClassDump : public ModulePass {
     }
   }
 };
+
 } // namespace llvm
+
+
 ModulePass *llvm::createAntiClassDumpPass() { return new AntiClassDump(); }
 char AntiClassDump::ID = 0;
 INITIALIZE_PASS(AntiClassDump, "acd", "Enable Anti-ClassDump.", true, true)

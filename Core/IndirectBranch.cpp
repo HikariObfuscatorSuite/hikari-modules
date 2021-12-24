@@ -11,23 +11,31 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Obfuscation/Obfuscation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+
 using namespace llvm;
 using namespace std;
+
+
 namespace llvm {
+
 struct IndirectBranch : public FunctionPass {
   static char ID;
   bool flag;
   bool initialized;
   map<BasicBlock *, unsigned long long> indexmap;
+
   IndirectBranch() : FunctionPass(ID) {
     this->flag = true;
     this->initialized = false;
   }
+
   IndirectBranch(bool flag) : FunctionPass(ID) {
     this->flag = flag;
     this->initialized = false;
   }
+
   StringRef getPassName() const override { return StringRef("IndirectBranch"); }
+
   bool initialize(Module &M) {
     vector<Constant *> BBs;
     unsigned long long i = 0;
@@ -50,6 +58,7 @@ struct IndirectBranch : public FunctionPass {
     appendToCompilerUsed(M, {Table});
     return true;
   }
+
   bool runOnFunction(Function &Func) override {
     if (!toObfuscate(flag, &Func, "indibr")) {
       return false;
@@ -120,16 +129,21 @@ struct IndirectBranch : public FunctionPass {
     }
     return true;
   }
+  
   virtual bool doFinalization(Module &M) override {
     indexmap.clear();
     initialized = false;
     return false;
   }
 };
+
 } // namespace llvm
+
 FunctionPass *llvm::createIndirectBranchPass() { return new IndirectBranch(); }
+
 FunctionPass *llvm::createIndirectBranchPass(bool flag) {
   return new IndirectBranch(flag);
 }
+
 char IndirectBranch::ID = 0;
 INITIALIZE_PASS(IndirectBranch, "indibran", "IndirectBranching", true, true)

@@ -1,6 +1,9 @@
 // For open-source license, please refer to [License](https://github.com/HikariObfuscator/Hikari/wiki/License).
 //===----------------------------------------------------------------------===//
 #include "llvm/Transforms/Obfuscation/StringEncryption.h"
+#if LLVM_VERSION_MAJOR >= 12
+#include "llvm/IR/DerivedTypes.h"             //wangchuanju 2021-11-24
+#endif
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -20,19 +23,28 @@
 #include <map>
 #include <set>
 #include <string>
+
 using namespace llvm;
 using namespace std;
+
+
 namespace llvm {
+
 struct StringEncryption : public ModulePass {
   static char ID;
+
   map<Function * /*Function*/, GlobalVariable * /*Decryption Status*/>
       encstatus;
+
   bool flag;
+
   StringEncryption() : ModulePass(ID) { this->flag = true; }
   StringEncryption(bool flag) : ModulePass(ID) { this->flag = flag; }
+
   StringRef getPassName() const override {
     return StringRef("StringEncryption");
   }
+
   bool runOnModule(Module &M) override {
     // in runOnModule. We simple iterate function list and dispatch functions
     // to handlers
@@ -40,21 +52,24 @@ struct StringEncryption : public ModulePass {
       Function *F = &(*iter);
 
       if (toObfuscate(flag, F, "strenc")) {
-        errs() << "Running StringEncryption On " << F->getName() << "\n";
+        errs() << "Running StringEncryption On function: " << F->getName() << "\n";
         Constant *S = ConstantInt::get(Type::getInt32Ty(M.getContext()), 0);
         GlobalVariable *GV = new GlobalVariable(
             M, S->getType(), false, GlobalValue::LinkageTypes::PrivateLinkage,
             S, "");
         encstatus[F] = GV;
         HandleFunction(F);
+        errs() << "Finished StringEncryption On function: " << F->getName() << "\n";
       }
     }
     return true;
   } // End runOnModule
+
   void HandleFunction(Function *Func) {
     FixFunctionConstantExpr(Func);
     set<GlobalVariable *> Globals;
     set<User *> Users;
+
     for (BasicBlock &BB : *Func) {
       for (Instruction &I : BB) {
         for (Value *Op : I.operands()) {
@@ -68,17 +83,24 @@ struct StringEncryption : public ModulePass {
         }
       }
     }
+
     set<GlobalVariable *> rawStrings;
     set<GlobalVariable *> objCStrings;
     map<GlobalVariable *, pair<Constant *, GlobalVariable *>> GV2Keys;
     map<GlobalVariable * /*old*/, pair<GlobalVariable * /*encrypted*/, GlobalVariable * /*decrypt space*/>> old2new;
+    
     for (GlobalVariable *GV : Globals) {
       if (GV->hasInitializer() &&
           GV->getSection() != StringRef("llvm.metadata") &&
           GV->getSection().find(StringRef("__objc")) == string::npos &&
           GV->getName().find("OBJC") == string::npos) {
         if (GV->getInitializer()->getType() ==
+#if LLVM_VERSION_MAJOR >= 12
+            //wangchuanju 2021-11-24
+            StructType::getTypeByName(Func->getParent()->getContext(), "struct.__NSConstantString_tag")) {
+#else
             Func->getParent()->getTypeByName("struct.__NSConstantString_tag")) {
+#endif
           objCStrings.insert(GV);
           rawStrings.insert(
               cast<GlobalVariable>(cast<ConstantStruct>(GV->getInitializer())
@@ -99,6 +121,7 @@ struct StringEncryption : public ModulePass {
         }
       }
     }
+
     for (GlobalVariable *GV : rawStrings) {
       if (GV->getInitializer()->isZeroValue() ||
           GV->getInitializer()->isNullValue()) {
@@ -200,6 +223,7 @@ struct StringEncryption : public ModulePass {
       old2new[GV] = make_pair(EncryptedRawGV, DecryptSpaceGV);
       GV2Keys[DecryptSpaceGV] = make_pair(KeyConst, EncryptedRawGV);
     }
+
     // Now prepare ObjC new GV
     for (GlobalVariable *GV : objCStrings) {
       ConstantStruct *CS = cast<ConstantStruct>(GV->getInitializer());
@@ -211,8 +235,10 @@ struct StringEncryption : public ModulePass {
       GlobalVariable *DecryptSpaceOCGV = ObjectivCString(GV, "DecryptSpaceObjC", oldrawString, old2new[oldrawString].second, CS);
       old2new[GV] = make_pair(EncryptedOCGV, DecryptSpaceOCGV);
     } // End prepare ObjC new GV
+
     if(old2new.empty() || GV2Keys.empty())
       return;
+
     // Replace Uses
     for (User *U : Users) {
       for (map<GlobalVariable *, pair<GlobalVariable *, GlobalVariable *>>::iterator iter =
@@ -222,6 +248,7 @@ struct StringEncryption : public ModulePass {
         iter->first->removeDeadConstantUsers();
       }
     } // End Replace Uses
+
     // CleanUp Old ObjC GVs
     for (GlobalVariable *GV : objCStrings) {
       if (GV->getNumUses() == 0) {
@@ -230,6 +257,7 @@ struct StringEncryption : public ModulePass {
         GV->eraseFromParent();
       }
     }
+
     // CleanUp Old Raw GVs
     for (map<GlobalVariable *, pair<GlobalVariable *, GlobalVariable *>>::iterator iter =
              old2new.begin();
@@ -241,6 +269,7 @@ struct StringEncryption : public ModulePass {
         toDelete->eraseFromParent();
       }
     }
+
     GlobalVariable *StatusGV = encstatus[Func];
     /*
       - Split Original EntryPoint BB into A and C.
@@ -267,17 +296,29 @@ struct StringEncryption : public ModulePass {
     LoadInst *LI = IRB.CreateLoad(StatusGV, "LoadEncryptionStatus");
     LI->setAtomic(AtomicOrdering::Acquire); // Will be released at the start of
                                             // C
+#if LLVM_VERSION_MAJOR >= 10
+    LI->setAlignment(Align(4));        //wangchuanju 2021-11-24
+#else
     LI->setAlignment(4);
+#endif
+
     Value *condition = IRB.CreateICmpEQ(
         LI, ConstantInt::get(Type::getInt32Ty(Func->getContext()), 0));
     A->getTerminator()->eraseFromParent();
     BranchInst::Create(B, C, condition, A);
+    
     // Add StoreInst atomically in C start
     // No matter control flow is coming from A or B, the GVs must be decrypted
     IRBuilder<> IRBC(C->getFirstNonPHIOrDbgOrLifetime());
     StoreInst *SI = IRBC.CreateStore(
         ConstantInt::get(Type::getInt32Ty(Func->getContext()), 1), StatusGV);
+
+#if LLVM_VERSION_MAJOR >= 10
+    SI->setAlignment(Align(4));        //wangchuanju 2021-11-24
+#else
     SI->setAlignment(4);
+#endif
+    
     SI->setAtomic(AtomicOrdering::Release); // Release the lock acquired in LI
 
   } // End of HandleFunction
@@ -329,11 +370,16 @@ struct StringEncryption : public ModulePass {
     encstatus.clear();
     return false;
   }
+
 };
+
+
 ModulePass *createStringEncryptionPass() { return new StringEncryption(); }
+
 ModulePass *createStringEncryptionPass(bool flag) {
   return new StringEncryption(flag);
 }
+
 } // namespace llvm
 
 char StringEncryption::ID = 0;
