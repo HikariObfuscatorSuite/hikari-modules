@@ -747,7 +747,11 @@ struct AntiClassDump : public ModulePass {
         // GEP's type check
         Value *BitCastedFromArrayToPtr = IRB->CreateBitCast(
             attrInMem, objc_property_attribute_t_type->getPointerTo());
-        Value *GEP = IRB->CreateInBoundsGEP(BitCastedFromArrayToPtr, zeroes);
+        // wangchuanju 2022-05-23 : avoid invoking deprecated function. 
+        //-+[
+        // Value *GEP = IRB->CreateInBoundsGEP(BitCastedFromArrayToPtr, zeroes);
+        Value *GEP = IRB->CreateInBoundsGEP(BitCastedFromArrayToPtr->getType()->getScalarType()->getPointerElementType(), BitCastedFromArrayToPtr, zeroes);
+        //]-+
         // Now GEP is done.
         // BitCast it back to our required type
         Value *GEPBitCasedToArg = IRB->CreateBitCast(

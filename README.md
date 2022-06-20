@@ -20,7 +20,7 @@ BUILD
 
 6. Create build configuration under directory "build".
 
-   cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLLVM_CREATE_XCODE_TOOLCHAIN=ON -DLLVM_TARGETS_TO_BUILD="X86;ARM;AArch64" -DLLVM_TARGET_ARCH=host -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF ../
+   cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLLVM_CREATE_XCODE_TOOLCHAIN=ON -DLLVM_TARGETS_TO_BUILD="X86;ARM;AArch64" -DLLVM_TARGET_ARCH=host -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF -DCOMPILER_RT_ENABLE_IOS=ON ../
 
 7. Build hanabi dylib. (switch to directory llvm/build)
 
@@ -51,11 +51,11 @@ INJECTION
 4. Inject the dylibs into clang under the new xctoolchain.
    Under directory usr/bin of the new xctoolchain, execute the following commands one by one. ( !!!ORDER IS VERY IMPORTANT!!! )
 
-   sudo optool install  -c load -p @executable_path/libsubstitute.dylib -t /Library/Developer/ToolChains/Hikari-Xcode13.1.xctoolchain/usr/bin/clang -b
+   sudo optool install  -c load -p @executable_path/libsubstitute.dylib -t /Library/Developer/Toolchains/Hikari-Xcode13.1.xctoolchain/usr/bin/clang -b
 
-   sudo optool install  -c load -p @executable_path/libLLVMHanabiDeps.dylib -t /Library/Developer/ToolChains/Hikari-Xcode13.1.xctoolchain/usr/bin/clang -b
+   sudo optool install  -c load -p @executable_path/libLLVMHanabiDeps.dylib -t /Library/Developer/Toolchains/Hikari-Xcode13.1.xctoolchain/usr/bin/clang -b
 
-   sudo optool install  -c load -p @executable_path/libLLVMHanabi.dylib -t /Library/Developer/ToolChains/Hikari-Xcode13.1.xctoolchain/usr/bin/clang -b
+   sudo optool install  -c load -p @executable_path/libLLVMHanabi.dylib -t /Library/Developer/Toolchains/Hikari-Xcode13.1.xctoolchain/usr/bin/clang -b
 
 
 USAGE

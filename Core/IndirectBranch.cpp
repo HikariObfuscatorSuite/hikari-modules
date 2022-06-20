@@ -119,8 +119,13 @@ struct IndirectBranch : public FunctionPass {
             ConstantInt::get(Type::getInt32Ty(Func.getParent()->getContext()),
                              indexmap[BI->getSuccessor(0)]);
       }
-      Value *GEP = IRB.CreateGEP(LoadFrom, {zero, index});
-      LoadInst *LI = IRB.CreateLoad(GEP, "IndirectBranchingTargetAddress");
+      // wangchuanju 2022-05-23 : avoid invoking deprecated function. 
+      //-+[
+      // Value *GEP = IRB.CreateGEP(LoadFrom, {zero, index});
+      // LoadInst *LI = IRB.CreateLoad(GEP, "IndirectBranchingTargetAddress");
+      Value *GEP = IRB.CreateGEP(LoadFrom->getType()->getScalarType()->getPointerElementType(), LoadFrom, {zero, index});
+      LoadInst *LI = IRB.CreateLoad(GEP->getType()->getPointerElementType(), GEP, "IndirectBranchingTargetAddress");
+      //]-+
       IndirectBrInst *indirBr = IndirectBrInst::Create(LI, BBs.size());
       for (BasicBlock *BB : BBs) {
         indirBr->addDestination(BB);

@@ -201,7 +201,7 @@ struct BogusControlFlow : public FunctionPass {
   void bogus(Function &F) {
     // For statistics and debug
     int NumBasicBlocks = 0;
-    bool firstTime = true; // First time we do the loop in this function
+    // bool firstTime = true; // First time we do the loop in this function
     bool hasBeenModified = false;
     DEBUG_WITH_TYPE("opt", errs() << "bcf: Started on function " << F.getName()
                                   << "\n");
@@ -269,7 +269,7 @@ struct BogusControlFlow : public FunctionPass {
         DEBUG_WITH_TYPE("cfg", errs()
                                    << "bcf: Function's not been modified \n");
       }
-      firstTime = false;
+      // firstTime = false;
     } while (--NumObfTimes > 0);
   }
 
@@ -724,8 +724,13 @@ struct BogusControlFlow : public FunctionPass {
       GlobalVariable *RHSGV =
           new GlobalVariable(M, Type::getInt32Ty(M.getContext()), false,
                              GlobalValue::PrivateLinkage, RHSC, "RHSGV");
-      LoadInst *LHS = IRBReal.CreateLoad(LHSGV, "Initial LHS");
-      LoadInst *RHS = IRBReal.CreateLoad(RHSGV, "Initial LHS");
+      // wangchuanju 2022-05-23 : avoid invoking deprecated function. 
+      //-+[
+      // LoadInst *LHS = IRBReal.CreateLoad(LHSGV, "Initial LHS");
+      // LoadInst *RHS = IRBReal.CreateLoad(RHSGV, "Initial LHS");
+      LoadInst *LHS = IRBReal.CreateLoad(LHSGV->getType()->getPointerElementType(), LHSGV, "Initial LHS");
+      LoadInst *RHS = IRBReal.CreateLoad(RHSGV->getType()->getPointerElementType(), RHSGV, "Initial LHS");
+      //]-+
       // To Speed-Up Evaluation
       Value *emuLHS = LHSC;
       Value *emuRHS = RHSC;

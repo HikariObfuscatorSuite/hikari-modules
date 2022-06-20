@@ -306,15 +306,18 @@ struct FunctionCallObfuscate : public FunctionPass {
           // Simple Extracting Failed
           // Use our own implementation
           if (calledFunction == NULL) {
+#if LLVM_VERSION_MAJOR >= 11
             DEBUG_WITH_TYPE(
                 "opt", errs()
                            << "Failed To Extract Function From Indirect Call: "
-#if LLVM_VERSION_MAJOR >= 11
                            << *CS.getCalledOperand() << "\n");     //wangchuanju 2021-11-24
 #else 
+            DEBUG_WITH_TYPE(
+                "opt", errs()
+                           << "Failed To Extract Function From Indirect Call: "
                            << *CS.getCalledValue() << "\n");
 #endif
-
+            
             continue;
           }
 
